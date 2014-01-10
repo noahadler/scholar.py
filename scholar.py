@@ -73,14 +73,16 @@ try:
     # Try importing for Python 3
     # pylint: disable-msg=F0401
     # pylint: disable-msg=E0611
-    from urllib.request import HTTPCookieProcessor, Request, build_opener
+    from urllib.request import HTTPCookieProcessor, Request, build_opener, HTTPError
     from urllib.parse import quote
     from http.cookiejar import CookieJar
+    from html.parser import HTMLParser
 except ImportError:
     # Fallback for Python 2
-    from urllib2 import Request, build_opener, HTTPCookieProcessor
+    from urllib2 import Request, build_opener, HTTPCookieProcessor, HTTPError
     from urllib import quote
     from cookielib import CookieJar
+    from HTMLParser import HTMLParser
 
 # Import BeautifulSoup -- try 4 first, fall back to older
 try:
@@ -112,7 +114,8 @@ class Article(object):
                       'num_versions':  [0,    'Versions',       3],
                       'url_citations': [None, 'Citations list', 4],
                       'url_versions':  [None, 'Versions list',  5],
-                      'year':          [None, 'Year',           6]}
+                      'year':          [None, 'Year',           6],
+                      'summary':       [None, 'Summary',        7]}
 
     def __getitem__(self, key):
         if key in self.attrs:
@@ -140,7 +143,7 @@ class Article(object):
         fmt = '%%%ds %%s' % max_label_len
         return '\n'.join([fmt % (item[1], item[0]) for item in items])
 
-    def as_csv(self, header=False, sep='|'):
+    def as_csv(self, header=False, sep=','):
         # Get keys sorted in specified order:
         keys = [pair[0] for pair in \
                 sorted([(key, val[2]) for key, val in list(self.attrs.items())],
@@ -148,7 +151,10 @@ class Article(object):
         res = []
         if header:
             res.append(sep.join(keys))
-        res.append(sep.join([unicode(self.attrs[key][0]) for key in keys]))
+
+        def quote_wrap(s):
+          return '"' + s.replace('"','""') + '"'
+        res.append(sep.join([quote_wrap(unicode(self.attrs[key][0])) for key in keys]))
         return '\n'.join(res)
 
 
@@ -188,6 +194,7 @@ class ScholarParser(object):
 
             if tag.name == 'div' and self._tag_has_class(tag, 'gs_rt') and \
                     tag.h3 and tag.h3.a:
+                
                 self.article['title'] = ''.join(tag.h3.a.findAll(text=True))
                 self.article['url'] = self._path2url(tag.h3.a['href'])
 
@@ -287,13 +294,20 @@ class ScholarParser120726(ScholarParser):
     def _parse_article(self, div):
         self.article = Article()
 
+        parser = HTMLParser()
+
         for tag in div:
             if not hasattr(tag, 'name'):
                 continue
             if tag.name == 'div' and self._tag_has_class(tag, 'gs_ri'):
-                if tag.a:
-                    self.article['title'] = ''.join(tag.a.findAll(text=True))
-                    self.article['url'] = self._path2url(tag.a['href'])
+                rt = tag.find('h3', {'class': 'gs_rt'})
+                if rt:
+                    ctu = rt.find('span')
+                    if ctu:
+                      ctu.extract()
+                    self.article['title'] = parser.unescape(''.join(rt.findAll(text=True)).strip())
+                    if rt.a:
+                      self.article['url'] = self._path2url(rt.a['href'])
 
                 if tag.find('div', {'class': 'gs_a'}):
                     year = self.year_re.findall(tag.find('div', {'class': 'gs_a'}).text)
@@ -301,6 +315,9 @@ class ScholarParser120726(ScholarParser):
 
                 if tag.find('div', {'class': 'gs_fl'}):
                     self._parse_links(tag.find('div', {'class': 'gs_fl'}))
+
+                if tag.find('div', {'class': 'gs_rs'}):
+                    self.article['summary'] = tag.find('div', {'class': 'gs_rs'}).text
 
         if self.article['title']:
             self.handle_article(self.article)
@@ -333,15 +350,16 @@ class ScholarQuerier(object):
         self.articles = []
         self.author = author
         # Clip to 100, as Google doesn't support more anyway
-        self.count = min(count, 100)
+        #self.count = min(count, 100)
+        self.count = count
 
         if author == '':
             self.scholar_url = self.NOAUTH_URL
         else:
             self.scholar_url = scholar_url or self.SCHOLAR_URL
 
-        if self.count != 0:
-            self.scholar_url += '&num=%d' % self.count
+        #if self.count != 0:
+        #    self.scholar_url += '&num=%d' % self.count
 
         self.cjar = CookieJar()
         self.opener = build_opener(HTTPCookieProcessor(self.cjar))
@@ -352,11 +370,17 @@ class ScholarQuerier(object):
         response.
         """
         self.clear_articles()
-        url = self.scholar_url % {'query': quote(encode(search)), 'author': quote(self.author)}
-        req = Request(url=url, headers={'User-Agent': self.USER_AGENT})
-        hdl = self.opener.open(req)
-        html = hdl.read()
-        self.parse(html)
+        num_retrieved = 0
+        while num_retrieved < self.count:
+          sys.stderr.write(str(num_retrieved) + '\n')
+          url = self.scholar_url % {'query': quote(encode('"'+search+'"')), 'author': quote(self.author)}
+          url += '&num=20&start=%d' % num_retrieved
+          req = Request(url=url, headers={'User-Agent': self.USER_AGENT})
+          sys.stderr.write(url)
+          hdl = self.opener.open(req)
+          html = hdl.read()
+          self.parse(html)
+          num_retrieved += 20
 
     def parse(self, html):
         """
@@ -382,7 +406,7 @@ def txt(query, author, count):
     for art in articles:
         print(art.as_txt() + '\n')
 
-def csv(query, author, count, header=False, sep='|'):
+def csv(query, author, count, header=False, sep=','):
     querier = ScholarQuerier(author=author, count=count)
     querier.query(query)
     articles = querier.articles
