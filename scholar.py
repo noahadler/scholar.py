@@ -332,6 +332,7 @@ class ScholarQuerier(object):
     """
     SCHOLAR_URL = 'http://scholar.google.com/scholar?hl=en&q=%(query)s+author:%(author)s&btnG=Search&as_subj=eng&as_sdt=1,5&as_ylo=&as_vis=0'
     NOAUTH_URL = 'http://scholar.google.com/scholar?hl=en&q=%(query)s&btnG=Search&as_subj=eng&as_std=1,5&as_ylo=&as_vis=0'
+    CITES_URL = 'http://scholar.google.com/scholar?hl=en&cites=%(cites)s'
 
     # Older URLs:
     # http://scholar.google.com/scholar?q=%s&hl=en&btnG=Search&as_sdt=2001&as_sdtp=on
@@ -346,14 +347,16 @@ class ScholarQuerier(object):
         def handle_article(self, art):
             self.querier.add_article(art)
 
-    def __init__(self, author='', scholar_url=None, count=0):
+    def __init__(self, author='', cites='', scholar_url=None, count=0):
         self.articles = []
         self.author = author
-        # Clip to 100, as Google doesn't support more anyway
-        #self.count = min(count, 100)
-        self.count = count
+        self.cites = cites
+        # Clip to 1000, as Google doesn't support more anyway
+        self.count = min(count, 1000)
 
-        if author == '':
+        if cites != '':
+            self.scholar_url = self.CITES_URL
+        elif author == '':
             self.scholar_url = self.NOAUTH_URL
         else:
             self.scholar_url = scholar_url or self.SCHOLAR_URL
@@ -373,7 +376,7 @@ class ScholarQuerier(object):
         num_retrieved = 0
         while num_retrieved < self.count:
           sys.stderr.write(str(num_retrieved) + '\n')
-          url = self.scholar_url % {'query': quote(encode('"'+search+'"')), 'author': quote(self.author)}
+          url = self.scholar_url % {'query': quote(encode('"'+search+'"')), 'author': quote(self.author), 'cites': self.cites}
           url += '&num=20&start=%d' % num_retrieved
           req = Request(url=url, headers={'User-Agent': self.USER_AGENT})
           sys.stderr.write(url)
@@ -397,8 +400,8 @@ class ScholarQuerier(object):
         self.articles = []
 
 
-def txt(query, author, count):
-    querier = ScholarQuerier(author=author, count=count)
+def txt(query, author, cites, count):
+    querier = ScholarQuerier(author=author, cites=cites, count=count)
     querier.query(query)
     articles = querier.articles
     if count > 0:
@@ -406,8 +409,8 @@ def txt(query, author, count):
     for art in articles:
         print(art.as_txt() + '\n')
 
-def csv(query, author, count, header=False, sep=','):
-    querier = ScholarQuerier(author=author, count=count)
+def csv(query, author, cites, count, header=False, sep=','):
+    querier = ScholarQuerier(author=author, cites=cites, count=count)
     querier.query(query)
     articles = querier.articles
     if count > 0:
@@ -427,6 +430,7 @@ Example: scholar.py -c 1 --txt --author einstein quantum"""
     parser = optparse.OptionParser(usage=usage, formatter=fmt)
     parser.add_option('-a', '--author',
                       help='Author name')
+    parser.add_option('--cites', help='Citation number')
     parser.add_option('--csv', action='store_true',
                       help='Print article data in CSV form (separator is "|")')
     parser.add_option('--csv-header', action='store_true',
@@ -435,22 +439,22 @@ Example: scholar.py -c 1 --txt --author einstein quantum"""
                       help='Print article data in text format')
     parser.add_option('-c', '--count', type='int',
                       help='Maximum number of results')
-    parser.set_defaults(count=0, author='')
+    parser.set_defaults(count=0, author='', cites='')
     options, args = parser.parse_args()
 
     # Show help if we have neither keyword search nor author name
-    if len(args) == 0 and options.author == '':
+    if len(args) == 0 and options.author == '' and options.cites == '':
         parser.print_help()
         return 1
 
     query = ' '.join(args)
 
     if options.csv:
-        csv(query, author=options.author, count=options.count)
+        csv(query, author=options.author, cites=options.cites, count=options.count)
     elif options.csv_header:
-        csv(query, author=options.author, count=options.count, header=True)
+        csv(query, author=options.author, cites=options.cites, count=options.count, header=True)
     else:
-        txt(query, author=options.author, count=options.count)
+        txt(query, author=options.author, cites=options.cites, count=options.count)
 
     return 0
 
